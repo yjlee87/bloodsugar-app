@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家庭专属血糖助手</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #007aff;
+            --success-color: #34c759;
+            --danger-color: #ff3b30;
+            --bg-color: #f2f2f7;
+            --card-bg: #ffffff;
+            --text-color: #1c1c1e;
+            --border-color: #e5e5ea;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 16px;
+        }
+        .container { max-width: 600px; margin: 0 auto; }
+        .hidden { display: none !important; }
+        h1, h2 { text-align: center; color: #000000; font-weight: 700; margin-bottom: 16px; }
+        h1 { font-size: 24px; }
+        h2 { font-size: 18px; text-align: left; margin-top: 5px; }
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .status-banner {
+            background: #e5f1ff;
+            border-left: 4px solid var(--primary-color);
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            text-align: center;
+            font-weight: 500;
+        }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 15px; }
+        input[type="number"], input[type="time"], input[type="date"], input[type="password"], select {
+            width: 100%; padding: 12px; border: 1px solid var(--border-color);
+            border-radius: 10px; box-sizing: border-box; font-size: 16px; background-color: #fafdff;
+        }
+        .radio-group { display: flex; gap: 8px; }
+        .radio-label {
+            flex: 1; text-align: center; background: #f2f2f7; padding: 12px 6px;
+            border-radius: 10px; cursor: pointer; font-size: 14px;
+        }
+        input[type="radio"] { display: none; }
+        input[type="radio"]:checked + .radio-label {
+            background: var(--primary-color); color: white; font-weight: 600;
+        }
+        button {
+            width: 100%; background: var(--primary-color); color: white; border: none;
+            padding: 14px; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer;
+        }
+        button:active { opacity: 0.8; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .chart-container { position: relative; height: 320px; width: 100%; }
+        .history-list { max-height: 200px; overflow-y: auto; }
+        .history-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 0; border-bottom: 1px solid var(--border-color); font-size: 14px;
+        }
+        .delete-btn { color: var(--danger-color); background: none; border: none; cursor: pointer; }
+        .empty-state { text-align: center; color: #8e8e93; font-size: 14px; padding: 20px 0; }
+        .note { font-size: 12px; color: #8e8e93; text-align: center; margin-top: -8px; margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+
+<!-- 锁屏界面 -->
+<div id="lockScreen" class="container">
+    <div class="card" style="margin-top: 100px; text-align: center;">
+        <h2>🔒 访问受限</h2>
+        <p style="color: #666; font-size: 14px;">请输入专属家庭暗号以同步血糖数据</p>
+        <div class="form-group">
+            <input type="password" id="passwordInput" placeholder="请输入4位数字暗号">
+        </div>
+        <button onclick="checkPassword()">解锁并同步</button>
+    </div>
+</div>
+
+<!-- 主内容界面 -->
+<div id="mainContent" class="container hidden">
+    <h1>🩸 血糖记录同步助手</h1>
+
+    <div class="card" style="padding: 14px 20px;">
+        <div id="syncStatus" class="status-banner">🔄 正在连接...</div>
+    </div>
+
+    <div class="card">
+        <h2>添加记录</h2>
+        <form id="sugarForm">
+            <div class="form-group">
+                <label for="date">日期</label>
+                <input type="date" id="date" required>
+            </div>
+            <div class="form-group">
+                <label for="sugarValue">血糖值 (mmol/L)</label>
+                <input type="number" id="sugarValue" step="0.1" placeholder="请输入测得的血糖" required min="0">
+            </div>
+            <div class="form-group">
+                <label>时间段</label>
+                <div class="radio-group">
+                    <input type="radio" id="periodMorning" name="period" value="morning">
+                    <label for="periodMorning" class="radio-label">早上 (8:00)</label>
+                    <input type="radio" id="periodEvening" name="period" value="evening">
+                    <label for="periodEvening" class="radio-label">晚上 (21:30)</label>
+                    <input type="radio" id="periodCustom" name="period" value="custom">
+                    <label for="periodCustom" class="radio-label">任意时间</label>
+                </div>
+            </div>
+            <div id="customOptions" class="hidden">
+                <div class="form-group">
+                    <label for="customTime">具体时间</label>
+                    <input type="time" id="customTime">
+                </div>
+                <div class="form-group">
+                    <label for="mealStatus">状态</label>
+                    <select id="mealStatus">
+                        <option value="postmeal">饭后 (2-3小时)</option>
+                        <option value="premeal">饭前</option>
+                        <option value="random">随机/不舒服</option>
+                    </select>
+                </div>
+            </div>
+            <button type="submit" id="submitBtn">保存并双向同步</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>添加血压记录</h2>
+        <form id="bpForm">
+            <div class="form-group">
+                <label for="bpDate">日期</label>
+                <input type="date" id="bpDate" required>
+            </div>
+            <div class="form-group">
+                <label for="systolic">收缩压 / 高压 (mmHg)</label>
+                <input type="number" id="systolic" step="1" placeholder="例如 120" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="diastolic">舒张压 / 低压 (mmHg)</label>
+                <input type="number" id="diastolic" step="1" placeholder="例如 80" required min="0">
+            </div>
+            <button type="submit" id="bpSubmitBtn">保存并双向同步</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>趋势图表 (非空腹区间：4.4 - 7.8)</h2>
+        <div class="chart-container">
+            <canvas id="sugarChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>历史记录</h2>
+        <div id="historyList" class="history-list"></div>
+    </div>
+
+    <div class="card">
+        <h2>血压趋势图表 (虚线：收缩压参考120 / 舒张压参考80)</h2>
+        <div class="chart-container">
+            <canvas id="bpChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>血压历史记录</h2>
+        <div id="bpHistoryList" class="history-list"></div>
+    </div>
+
+    <p class="note">数据保存在 Firebase 云端，家人打开同一个链接就能看到同一份记录，新增/删除会实时同步</p>
+</div>
+
+<!-- ====== Firebase (Realtime Database) ====== -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+        getDatabase, ref, set, onValue
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyCCxum8QyYVChaZQhQ33mLtRbiz81II9wo",
+        authDomain: "sugartracking-32a01.firebaseapp.com",
+        databaseURL: "https://sugartracking-32a01-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "sugartracking-32a01",
+        storageBucket: "sugartracking-32a01.firebasestorage.app",
+        messagingSenderId: "798047186654",
+        appId: "1:798047186654:web:42b8c5216b4b42831b9c4f",
+        measurementId: "G-D221K13H77"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const recordsRef = ref(db, "bloodsugar/family/records");
+    const bpRecordsRef = ref(db, "bloodpressure/family/records");
+
+    const CORRECT_PASSWORD = '1234';
+    let records = [];
+    let bpRecords = [];
+    let myChart = null;
+    let bpChart = null;
+    let unsubscribe = null;
+    let bpUnsubscribe = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (sessionStorage.getItem('bloodsugar_unlocked') === 'true') {
+            showMainPage();
+        }
+    });
+
+    window.checkPassword = function () {
+        const input = document.getElementById('passwordInput').value;
+        if (input === CORRECT_PASSWORD) {
+            sessionStorage.setItem('bloodsugar_unlocked', 'true');
+            showMainPage();
+        } else {
+            alert('暗号错误！');
+        }
+    };
+
+    function showMainPage() {
+        document.getElementById('lockScreen').classList.add('hidden');
+        document.getElementById('mainContent').classList.remove('hidden');
+        initFormDefaults();
+        setupEventListeners();
+        listenToCloudData();
+        listenToBPData();
+    }
+
+    function initFormDefaults() {
+        const now = new Date();
+        document.getElementById('date').value = now.toISOString().split('T')[0];
+        document.getElementById('bpDate').value = now.toISOString().split('T')[0];
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+        const timeVal = hours * 60 + minutes;
+
+        if (timeVal >= 420 && timeVal <= 540) {
+            document.getElementById('periodMorning').checked = true;
+        } else if (timeVal >= 1230 && timeVal <= 1350) {
+            document.getElementById('periodEvening').checked = true;
+        } else {
+            document.getElementById('periodCustom').checked = true;
+            document.getElementById('customOptions').classList.remove('hidden');
+            document.getElementById('customTime').value = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+        }
+    }
+
+    function setupEventListeners() {
+        document.querySelectorAll('input[name="period"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                document.getElementById('customOptions').classList.toggle('hidden', e.target.value !== 'custom');
+            });
+        });
+        document.getElementById('sugarForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            saveRecord();
+        });
+        document.getElementById('bpForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            saveBPRecord();
+        });
+    }
+
+    // 实时监听云端数据：只要有人改了数据，所有打开这个页面的设备都会自动刷新
+    function listenToCloudData() {
+        updateSyncStatus('🔄 正在连接云端...', '#007aff', '#e5f1ff');
+        if (unsubscribe) unsubscribe();
+        unsubscribe = onValue(recordsRef, (snap) => {
+            const val = snap.val();
+            records = Array.isArray(val) ? val.filter(Boolean) : (val ? Object.values(val) : []);
+            updateSyncStatus('✅ 已连接，实时同步中', '#34c759', '#eafaf1');
+            renderChart();
+            renderHistory();
+        }, (err) => {
+            console.error(err);
+            updateSyncStatus('❌ 连接云端失败，请检查 Firebase 配置和 Rules', '#ff3b30', '#fdeceb');
+        });
+    }
+
+    async function saveRecord() {
+        const date = document.getElementById('date').value;
+        const value = parseFloat(document.getElementById('sugarValue').value);
+        const period = document.querySelector('input[name="period"]:checked').value;
+
+        let displayTime = period === 'morning' ? '08:00' : (period === 'evening' ? '21:30' : document.getElementById('customTime').value);
+        let mealText = '饭后';
+        if (period === 'custom') {
+            const status = document.getElementById('mealStatus').value;
+            mealText = status === 'postmeal' ? '饭后' : (status === 'premeal' ? '饭前' : '随机');
+        }
+
+        const newRecord = {
+            id: Date.now(),
+            dateTime: `${date}T${displayTime}`,
+            date: date,
+            time: displayTime,
+            value: value,
+            period: period,
+            mealStatus: mealText
+        };
+
+        const updated = [...records, newRecord].sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+        const submitBtn = document.getElementById('submitBtn');
+        submitBtn.disabled = true;
+        updateSyncStatus('📤 正在保存到云端...', '#007aff', '#e5f1ff');
+
+        try {
+            await set(recordsRef, updated);
+            document.getElementById('sugarValue').value = '';
+            // 界面会通过 onValue 自动刷新，不需要手动 renderChart/renderHistory
+        } catch (e) {
+            console.error(e);
+            updateSyncStatus('❌ 保存失败，请重试', '#ff3b30', '#fdeceb');
+            alert('保存到云端失败，请检查网络后重新点击保存！');
+        } finally {
+            submitBtn.disabled = false;
+        }
+    }
+
+    window.deleteRecord = async function (id) {
+        if (!confirm('确定要删除这条记录吗？')) return;
+        const updated = records.filter(r => r.id !== id);
+        try {
+            await set(recordsRef, updated);
+        } catch (e) {
+            console.error(e);
+            alert('删除失败，请重试');
+        }
+    };
+
+    // ====== 血压 ======
+    function listenToBPData() {
+        if (bpUnsubscribe) bpUnsubscribe();
+        bpUnsubscribe = onValue(bpRecordsRef, (snap) => {
+            const val = snap.val();
+            bpRecords = Array.isArray(val) ? val.filter(Boolean) : (val ? Object.values(val) : []);
+            renderBPChart();
+            renderBPHistory();
+        }, (err) => {
+            console.error(err);
+        });
+    }
+
+    async function saveBPRecord() {
+        const date = document.getElementById('bpDate').value;
+        const systolic = parseFloat(document.getElementById('systolic').value);
+        const diastolic = parseFloat(document.getElementById('diastolic').value);
+
+        const newRecord = {
+            id: Date.now(),
+            date: date,
+            systolic: systolic,
+            diastolic: diastolic
+        };
+
+        const updated = [...bpRecords, newRecord].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        const submitBtn = document.getElementById('bpSubmitBtn');
+        submitBtn.disabled = true;
+
+        try {
+            await set(bpRecordsRef, updated);
+            document.getElementById('systolic').value = '';
+            document.getElementById('diastolic').value = '';
+        } catch (e) {
+            console.error(e);
+            alert('保存到云端失败，请检查网络后重新点击保存！');
+        } finally {
+            submitBtn.disabled = false;
+        }
+    }
+
+    window.deleteBPRecord = async function (id) {
+        if (!confirm('确定要删除这条记录吗？')) return;
+        const updated = bpRecords.filter(r => r.id !== id);
+        try {
+            await set(bpRecordsRef, updated);
+        } catch (e) {
+            console.error(e);
+            alert('删除失败，请重试');
+        }
+    };
+
+    function renderBPHistory() {
+        const listContainer = document.getElementById('bpHistoryList');
+        listContainer.innerHTML = '';
+        if (bpRecords.length === 0) {
+            listContainer.innerHTML = '<div class="empty-state">暂无记录</div>';
+            return;
+        }
+        [...bpRecords].reverse().forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `
+                <span>📅 ${r.date}</span>
+                <strong>💗 ${r.systolic}/${r.diastolic} mmHg</strong>
+                <button class="delete-btn" onclick="deleteBPRecord(${r.id})">删除</button>
+            `;
+            listContainer.appendChild(item);
+        });
+    }
+
+    function renderBPChart() {
+        const ctx = document.getElementById('bpChart').getContext('2d');
+        const systolicData = bpRecords.map(r => ({ x: new Date(r.date), y: r.systolic }));
+        const diastolicData = bpRecords.map(r => ({ x: new Date(r.date), y: r.diastolic }));
+
+        if (bpChart) bpChart.destroy();
+        const existingChart = Chart.getChart(ctx);
+        if (existingChart) existingChart.destroy();
+
+        bpChart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: '收缩压 (高压)',
+                        data: systolicData,
+                        backgroundColor: '#ff3b30',
+                        borderColor: '#ff3b30',
+                        pointRadius: 6,
+                        showLine: true
+                    },
+                    {
+                        label: '舒张压 (低压)',
+                        data: diastolicData,
+                        backgroundColor: '#007aff',
+                        borderColor: '#007aff',
+                        pointRadius: 6,
+                        showLine: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { type: 'time', time: { unit: 'day', displayFormats: { day: 'MM-dd' } } },
+                    y: { min: 40, max: 200 }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) { return `${context.dataset.label}: ${context.raw.y} mmHg`; }
+                        }
+                    }
+                }
+            },
+            plugins: [{
+                id: 'bpReferenceLines',
+                beforeDraw: function(chart) {
+                    const {ctx, chartArea: {left, right}, scales: {y}} = chart;
+                    if (!y) return;
+                    ctx.save();
+                    ctx.setLineDash([5, 5]);
+                    ctx.lineWidth = 1;
+
+                    ctx.strokeStyle = 'rgba(255, 59, 48, 0.5)';
+                    const y120 = y.getPixelForValue(120);
+                    ctx.beginPath();
+                    ctx.moveTo(left, y120);
+                    ctx.lineTo(right, y120);
+                    ctx.stroke();
+
+                    ctx.strokeStyle = 'rgba(0, 122, 255, 0.5)';
+                    const y80 = y.getPixelForValue(80);
+                    ctx.beginPath();
+                    ctx.moveTo(left, y80);
+                    ctx.lineTo(right, y80);
+                    ctx.stroke();
+
+                    ctx.restore();
+                }
+            }]
+        });
+    }
+
+    function updateSyncStatus(text, color, bgColor) {
+        const banner = document.getElementById('syncStatus');
+        if (banner) {
+            banner.innerText = text;
+            banner.style.color = color;
+            banner.style.borderColor = color;
+            banner.style.backgroundColor = bgColor;
+        }
+    }
+
+    function renderHistory() {
+        const listContainer = document.getElementById('historyList');
+        listContainer.innerHTML = '';
+        if (records.length === 0) {
+            listContainer.innerHTML = '<div class="empty-state">暂无记录</div>';
+            return;
+        }
+        [...records].reverse().forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `
+                <span>📅 ${r.date} ${r.time} (${r.mealStatus})</span>
+                <strong>🩸 ${r.value} mmol/L</strong>
+                <button class="delete-btn" onclick="deleteRecord(${r.id})">删除</button>
+            `;
+            listContainer.appendChild(item);
+        });
+    }
+
+    function renderChart() {
+        const ctx = document.getElementById('sugarChart').getContext('2d');
+        const chartData = records.map(r => ({
+            x: new Date(r.dateTime),
+            y: r.value,
+            label: `${r.time} (${r.mealStatus})`
+        }));
+
+        if (myChart) myChart.destroy();
+        const existingChart = Chart.getChart(ctx);
+        if (existingChart) existingChart.destroy();
+
+        myChart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: '血糖值 (mmol/L)',
+                    data: chartData,
+                    backgroundColor: '#007aff',
+                    pointRadius: 6,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { type: 'time', time: { unit: 'day', displayFormats: { day: 'MM-dd' } } },
+                    y: { min: 2, max: 15 }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) { return `时间: ${context.raw.label} | 血糖: ${context.raw.y}`; }
+                        }
+                    }
+                }
+            },
+            plugins: [{
+                id: 'zoneBackground',
+                beforeDraw: function(chart) {
+                    const {ctx, chartArea: {left, right}, scales: {y}} = chart;
+                    if (!y) return;
+                    ctx.save();
+                    const yTop = y.getPixelForValue(7.8);
+                    const yBottom = y.getPixelForValue(4.4);
+                    ctx.fillStyle = 'rgba(52, 199, 89, 0.15)';
+                    ctx.fillRect(left, yTop, right - left, yBottom - yTop);
+                    ctx.restore();
+                }
+            }]
+        });
+    }
+</script>
+</body>
+</html>
