@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>家庭专属血糖助手</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-adapter-date-fns/3.0.0/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         :root {
             --primary-color: #007aff;
@@ -65,6 +65,7 @@
             padding: 14px; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer;
         }
         button:active { opacity: 0.8; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
         .chart-container { position: relative; height: 320px; width: 100%; }
         .history-list { max-height: 200px; overflow-y: auto; }
         .history-item {
@@ -72,6 +73,8 @@
             padding: 12px 0; border-bottom: 1px solid var(--border-color); font-size: 14px;
         }
         .delete-btn { color: var(--danger-color); background: none; border: none; cursor: pointer; }
+        .empty-state { text-align: center; color: #8e8e93; font-size: 14px; padding: 20px 0; }
+        .note { font-size: 12px; color: #8e8e93; text-align: center; margin-top: -8px; margin-bottom: 16px; }
     </style>
 </head>
 <body>
@@ -93,7 +96,7 @@
     <h1>🩸 血糖记录同步助手</h1>
 
     <div class="card" style="padding: 14px 20px;">
-        <div id="syncStatus" class="status-banner">🔄 正在连接多端实时云节点...</div>
+        <div id="syncStatus" class="status-banner">🔄 正在连接...</div>
     </div>
 
     <div class="card">
@@ -132,7 +135,7 @@
                     </select>
                 </div>
             </div>
-            <button type="submit">保存并双向同步</button>
+            <button type="submit" id="submitBtn">保存并双向同步</button>
         </form>
     </div>
 
@@ -147,39 +150,59 @@
         <h2>历史记录</h2>
         <div id="historyList" class="history-list"></div>
     </div>
+
+    <p class="note">数据保存在 Firebase 云端，家人打开同一个链接就能看到同一份记录，新增/删除会实时同步</p>
 </div>
 
-<script>
-    // 专属公共桥梁数据库通道 (实时全网同步通道)
-    const SYNC_URL = 'https://api.countapi.xyz/hit/family_bloodsugar_yj_2026/visits'; 
-    const DB_URL = 'https://jsonblob.com/api/jsonBlob/1202283920198230000'; // 公共全局实时数据链
+<!-- ====== Firebase (Realtime Database) ====== -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+        getDatabase, ref, set, onValue
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-    const CORRECT_PASSWORD = '1234'; 
+    const firebaseConfig = {
+        apiKey: "AIzaSyCCxum8QyYVChaZQhQ33mLtRbiz81II9wo",
+        authDomain: "sugartracking-32a01.firebaseapp.com",
+        databaseURL: "https://sugartracking-32a01-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "sugartracking-32a01",
+        storageBucket: "sugartracking-32a01.firebasestorage.app",
+        messagingSenderId: "798047186654",
+        appId: "1:798047186654:web:42b8c5216b4b42831b9c4f",
+        measurementId: "G-D221K13H77"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const recordsRef = ref(db, "bloodsugar/family/records");
+
+    const CORRECT_PASSWORD = '1234';
     let records = [];
     let myChart = null;
+    let unsubscribe = null;
 
     document.addEventListener('DOMContentLoaded', () => {
-        if (localStorage.getItem('bloodsugar_authenticated') === 'true') {
+        if (sessionStorage.getItem('bloodsugar_unlocked') === 'true') {
             showMainPage();
         }
     });
 
-    function checkPassword() {
+    window.checkPassword = function () {
         const input = document.getElementById('passwordInput').value;
         if (input === CORRECT_PASSWORD) {
-            localStorage.setItem('bloodsugar_authenticated', 'true');
+            sessionStorage.setItem('bloodsugar_unlocked', 'true');
             showMainPage();
         } else {
             alert('暗号错误！');
         }
-    }
+    };
 
     function showMainPage() {
         document.getElementById('lockScreen').classList.add('hidden');
         document.getElementById('mainContent').classList.remove('hidden');
         initFormDefaults();
         setupEventListeners();
-        fetchCloudData();
+        listenToCloudData();
     }
 
     function initFormDefaults() {
@@ -202,8 +225,8 @@
 
     function setupEventListeners() {
         document.querySelectorAll('input[name="period"]').forEach(radio => {
-            radio.addEventListener('change', (e) => { 
-                document.getElementById('customOptions').classList.toggle('hidden', e.target.value !== 'custom'); 
+            radio.addEventListener('change', (e) => {
+                document.getElementById('customOptions').classList.toggle('hidden', e.target.value !== 'custom');
             });
         });
         document.getElementById('sugarForm').addEventListener('submit', (e) => {
@@ -212,35 +235,27 @@
         });
     }
 
-    // 从云端实时获取多设备共享数据
-    function fetchCloudData() {
-        updateSyncStatus('🔄 正在同步云端多端数据...', '#007aff', '#e5f1ff');
-        
-        fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
-            method: 'GET',
-            headers: { 'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880' }
-        })
-        .then(res => res.json())
-        .then(res => {
-            records = res.data || [];
-            updateSyncStatus('✅ 双向同步成功！两端数据完全一致', '#34c759', '#eafaf1');
+    // 实时监听云端数据：只要有人改了数据，所有打开这个页面的设备都会自动刷新
+    function listenToCloudData() {
+        updateSyncStatus('🔄 正在连接云端...', '#007aff', '#e5f1ff');
+        if (unsubscribe) unsubscribe();
+        unsubscribe = onValue(recordsRef, (snap) => {
+            const val = snap.val();
+            records = Array.isArray(val) ? val.filter(Boolean) : (val ? Object.values(val) : []);
+            updateSyncStatus('✅ 已连接，实时同步中', '#34c759', '#eafaf1');
             renderChart();
             renderHistory();
-        })
-        .catch(err => {
-            // 如果网络失败，尝试从备用实时通道获取
-            updateSyncStatus('⚠️ 正在从备用节点抓取数据...', '#ff9500', '#fff5e6');
-            records = JSON.parse(localStorage.getItem('bloodsugar_local_bak')) || [];
-            renderChart();
-            renderHistory();
+        }, (err) => {
+            console.error(err);
+            updateSyncStatus('❌ 连接云端失败，请检查 Firebase 配置和 Rules', '#ff3b30', '#fdeceb');
         });
     }
 
-    function saveRecord() {
+    async function saveRecord() {
         const date = document.getElementById('date').value;
         const value = parseFloat(document.getElementById('sugarValue').value);
         const period = document.querySelector('input[name="period"]:checked').value;
-        
+
         let displayTime = period === 'morning' ? '08:00' : (period === 'evening' ? '21:30' : document.getElementById('customTime').value);
         let mealText = '饭后';
         if (period === 'custom') {
@@ -258,51 +273,38 @@
             mealStatus: mealText
         };
 
-        records.push(newRecord);
-        records.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
-        
-        localStorage.setItem('bloodsugar_local_bak', JSON.stringify(records));
-        updateSyncStatus('📤 正在上传至跨设备云端...', '#007aff', '#e5f1ff');
+        const updated = [...records, newRecord].sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
 
-        // 发送到公用多端数据共享中心
-        fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
-            method: 'PUT',
-            headers: { 
-                'Content-Type': 'application/json',
-                'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880'
-            },
-            body: JSON.stringify({ jsonData: records })
-        })
-        .then(() => {
-            updateSyncStatus('✅ 成功推送到云端！手机打开即可看到！', '#34c759', '#eafaf1');
-            renderChart();
-            renderHistory();
+        const submitBtn = document.getElementById('submitBtn');
+        submitBtn.disabled = true;
+        updateSyncStatus('📤 正在保存到云端...', '#007aff', '#e5f1ff');
+
+        try {
+            await set(recordsRef, updated);
             document.getElementById('sugarValue').value = '';
-        })
-        .catch(() => {
-            alert('上传云端稍微卡顿，请重新点击保存！');
-        });
-    }
-
-    function deleteRecord(id) {
-        if(confirm('确定要删除这条记录吗？')) {
-            records = records.filter(r => r.id !== id);
-            localStorage.setItem('bloodsugar_local_bak', JSON.stringify(records));
-            
-            fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
-                method: 'PUT',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880'
-                },
-                body: JSON.stringify({ jsonData: records })
-            }).then(() => { fetchCloudData(); });
+        } catch (e) {
+            console.error(e);
+            updateSyncStatus('❌ 保存失败，请重试', '#ff3b30', '#fdeceb');
+            alert('保存到云端失败，请检查网络后重新点击保存！');
+        } finally {
+            submitBtn.disabled = false;
         }
     }
 
+    window.deleteRecord = async function (id) {
+        if (!confirm('确定要删除这条记录吗？')) return;
+        const updated = records.filter(r => r.id !== id);
+        try {
+            await set(recordsRef, updated);
+        } catch (e) {
+            console.error(e);
+            alert('删除失败，请重试');
+        }
+    };
+
     function updateSyncStatus(text, color, bgColor) {
         const banner = document.getElementById('syncStatus');
-        if(banner) {
+        if (banner) {
             banner.innerText = text;
             banner.style.color = color;
             banner.style.borderColor = color;
@@ -313,6 +315,10 @@
     function renderHistory() {
         const listContainer = document.getElementById('historyList');
         listContainer.innerHTML = '';
+        if (records.length === 0) {
+            listContainer.innerHTML = '<div class="empty-state">暂无记录</div>';
+            return;
+        }
         [...records].reverse().forEach(r => {
             const item = document.createElement('div');
             item.className = 'history-item';
@@ -336,7 +342,7 @@
         if (myChart) myChart.destroy();
 
         myChart = new Chart(ctx, {
-            type: 'scatter', 
+            type: 'scatter',
             data: {
                 datasets: [{
                     label: '血糖值 (mmol/L)',
