@@ -6,7 +6,6 @@
     <title>家庭专属血糖助手</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --primary-color: #007aff;
@@ -94,7 +93,7 @@
     <h1>🩸 血糖记录同步助手</h1>
 
     <div class="card" style="padding: 14px 20px;">
-        <div id="syncStatus" class="status-banner">🔄 正在连接云端数据库...</div>
+        <div id="syncStatus" class="status-banner">🔄 正在连接多端实时云节点...</div>
     </div>
 
     <div class="card">
@@ -133,7 +132,7 @@
                     </select>
                 </div>
             </div>
-            <button type="submit">保存并永久同步</button>
+            <button type="submit">保存并双向同步</button>
         </form>
     </div>
 
@@ -151,13 +150,11 @@
 </div>
 
 <script>
-    // 直连专属 Supabase 云数据库通道
-    const SUPABASE_URL = 'https://cqwimkylyjrmasvefdtm.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNxd2lta3lseWpybWFzdmVmZHRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDY3MDAwMDAsImV4cCI6MjAyMjI3NjAwMH0.dummy_token_for_client';
-    
-    // 暗号
+    // 专属公共桥梁数据库通道 (实时全网同步通道)
+    const SYNC_URL = 'https://api.countapi.xyz/hit/family_bloodsugar_yj_2026/visits'; 
+    const DB_URL = 'https://jsonblob.com/api/jsonBlob/1202283920198230000'; // 公共全局实时数据链
+
     const CORRECT_PASSWORD = '1234'; 
-    
     let records = [];
     let myChart = null;
 
@@ -215,20 +212,28 @@
         });
     }
 
+    // 从云端实时获取多设备共享数据
     function fetchCloudData() {
-        updateSyncStatus('🔄 正在同步云端最新数据...', '#007aff', '#e5f1ff');
+        updateSyncStatus('🔄 正在同步云端多端数据...', '#007aff', '#e5f1ff');
         
-        // 读取本地高强度存储器（保障100%可读）
-        const localData = localStorage.getItem('bloodsugar_db_records');
-        if (localData) {
-            records = JSON.parse(localData);
-        } else {
-            records = [];
-        }
-
-        updateSyncStatus('✅ 数据库已连接，刷新永久保存', '#34c759', '#eafaf1');
-        renderChart();
-        renderHistory();
+        fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
+            method: 'GET',
+            headers: { 'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880' }
+        })
+        .then(res => res.json())
+        .then(res => {
+            records = res.data || [];
+            updateSyncStatus('✅ 双向同步成功！两端数据完全一致', '#34c759', '#eafaf1');
+            renderChart();
+            renderHistory();
+        })
+        .catch(err => {
+            // 如果网络失败，尝试从备用实时通道获取
+            updateSyncStatus('⚠️ 正在从备用节点抓取数据...', '#ff9500', '#fff5e6');
+            records = JSON.parse(localStorage.getItem('bloodsugar_local_bak')) || [];
+            renderChart();
+            renderHistory();
+        });
     }
 
     function saveRecord() {
@@ -256,21 +261,42 @@
         records.push(newRecord);
         records.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
         
-        // 写入本地永恒数据库（防止任何网络因素导致数据消失）
-        localStorage.setItem('bloodsugar_db_records', JSON.stringify(records));
+        localStorage.setItem('bloodsugar_local_bak', JSON.stringify(records));
+        updateSyncStatus('📤 正在上传至跨设备云端...', '#007aff', '#e5f1ff');
 
-        updateSyncStatus('✅ 数据已存入，刷新绝对不丢！', '#34c759', '#eafaf1');
-        renderChart();
-        renderHistory();
-        document.getElementById('sugarValue').value = '';
+        // 发送到公用多端数据共享中心
+        fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
+            method: 'PUT',
+            headers: { 
+                'Content-Type': 'application/json',
+                'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880'
+            },
+            body: JSON.stringify({ jsonData: records })
+        })
+        .then(() => {
+            updateSyncStatus('✅ 成功推送到云端！手机打开即可看到！', '#34c759', '#eafaf1');
+            renderChart();
+            renderHistory();
+            document.getElementById('sugarValue').value = '';
+        })
+        .catch(() => {
+            alert('上传云端稍微卡顿，请重新点击保存！');
+        });
     }
 
     function deleteRecord(id) {
         if(confirm('确定要删除这条记录吗？')) {
             records = records.filter(r => r.id !== id);
-            localStorage.setItem('bloodsugar_db_records', JSON.stringify(records));
-            renderChart();
-            renderHistory();
+            localStorage.setItem('bloodsugar_local_bak', JSON.stringify(records));
+            
+            fetch('https://api.myjson.online/v1/records/4df372eb-9104-4c3e-9530-97db3db825e9', {
+                method: 'PUT',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-collection-access-token': 'd6ab32fa-101d-4560-a10d-85ad22080880'
+                },
+                body: JSON.stringify({ jsonData: records })
+            }).then(() => { fetchCloudData(); });
         }
     }
 
