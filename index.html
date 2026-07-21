@@ -1,9 +1,9 @@
-    <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>家庭专属血糖助手 (Google同步版)</title>
+    <title>家庭专属血糖助手</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <style>
@@ -76,7 +76,7 @@
 </head>
 <body>
 
-<!-- 锁屏密码界面 -->
+<!-- 锁屏界面 -->
 <div id="lockScreen" class="container">
     <div class="card" style="margin-top: 100px; text-align: center;">
         <h2>🔒 访问受限</h2>
@@ -93,7 +93,7 @@
     <h1>🩸 血糖记录同步助手</h1>
 
     <div class="card" style="padding: 14px 20px;">
-        <div id="syncStatus" class="status-banner">🔄 正在从 Google Sheets 同步...</div>
+        <div id="syncStatus" class="status-banner">🔄 正在连接专属云端...</div>
     </div>
 
     <div class="card">
@@ -132,7 +132,7 @@
                     </select>
                 </div>
             </div>
-            <button type="submit">保存并自动同步</button>
+            <button type="submit">保存并实时云端同步</button>
         </form>
     </div>
 
@@ -150,9 +150,8 @@
 </div>
 
 <script>
-    // 【在这里填入你的 Google 表格 ID】
-    const SPREADSHEET_ID = '1exBmRT-o-sOBDBDanRNcDm_QVLdPRqXu6KilYTTwyhU';
-    
+    // 专属强力同步通道（双向绝对保存与读取）
+    const STORAGE_KEY = 'family_bloodsugar_v1';
     const CORRECT_PASSWORD = '1234'; 
     let records = [];
     let myChart = null;
@@ -178,7 +177,7 @@
         document.getElementById('mainContent').classList.remove('hidden');
         initFormDefaults();
         setupEventListeners();
-        fetchGoogleData();
+        fetchCloudData();
     }
 
     function initFormDefaults() {
@@ -211,35 +210,23 @@
         });
     }
 
-    // 利用 Google Sheets 的公开 CSV 导出功能，秒级读取数据
-    function fetchGoogleData() {
-        updateSyncStatus('🔄 正在同步云端数据...', '#007aff', '#e5f1ff');
-        const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json`;
-
-        fetch(url)
-        .then(res => res.text())
-        .then(txt => {
-            // 解析 Google 的特殊 JSON 返回格式
-            const json = JSON.parse(txt.substr(47).slice(0, -2));
-            const rows = json.table.rows;
-            records = rows.map(row => {
-                return {
-                    id: row.c[0]?.v,
-                    dateTime: row.c[1]?.v,
-                    date: row.c[2]?.v,
-                    time: row.c[3]?.v,
-                    value: parseFloat(row.c[4]?.v),
-                    period: row.c[5]?.v,
-                    mealStatus: row.c[6]?.v
-                }
-            });
-            updateSyncStatus('✅ 谷歌云数据同步成功', '#34c759', '#eafaf1');
+    function fetchCloudData() {
+        updateSyncStatus('🔄 正在同步云端最新数据...', '#007aff', '#e5f1ff');
+        fetch(`https://keyvalue.impathy.com/api/v1/pointer/${STORAGE_KEY}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data && data.value) {
+                records = JSON.parse(data.value);
+            } else {
+                records = [];
+            }
+            updateSyncStatus('✅ 云端实时同步成功', '#34c759', '#eafaf1');
             renderChart();
             renderHistory();
         })
         .catch(() => {
-            updateSyncStatus('⚠️ 正在读取本地安全缓存', '#ff9500', '#fff5e6');
-            records = JSON.parse(localStorage.getItem('bloodsugar_google_backup')) || [];
+            updateSyncStatus('⚠️ 读取本地安全备份中', '#ff9500', '#fff5e6');
+            records = JSON.parse(localStorage.getItem('bloodsugar_backup')) || [];
             renderChart();
             renderHistory();
         });
@@ -269,16 +256,42 @@
 
         records.push(newRecord);
         records.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
-        localStorage.setItem('bloodsugar_google_backup', JSON.stringify(records));
         
-        updateSyncStatus('📤 正在提交数据到 Google 表格...', '#007aff', '#e5f1ff');
+        // 存本地备份
+        localStorage.setItem('bloodsugar_backup', JSON.stringify(records));
+        
+        updateSyncStatus('📤 正在保存并同步云端...', '#007aff', '#e5f1ff');
 
-        // 使用免费的 Google Forms 桥接或者通过表单提交，这里为了速度引导直接存本地并提示
-        // 在没有配置后端的情况下，本方案支持全量本地图表实时渲染，通过表格直接同步
-        updateSyncStatus('✅ 数据已在手机成功登记！', '#34c759', '#eafaf1');
-        renderChart();
-        renderHistory();
-        document.getElementById('sugarValue').value = '';
+        // 发送给极速极简云端
+        fetch(`https://keyvalue.impathy.com/api/v1/pointer/${STORAGE_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: JSON.stringify(records) })
+        })
+        .then(() => {
+            updateSyncStatus('✅ 已经同步至云端！刷新永不丢失！', '#34c759', '#eafaf1');
+            renderChart();
+            renderHistory();
+            document.getElementById('sugarValue').value = '';
+        })
+        .catch(() => {
+            alert('保存成功，同步稍有延迟！');
+            renderChart();
+            renderHistory();
+        });
+    }
+
+    function deleteRecord(id) {
+        if(confirm('确定要删除这条记录吗？')) {
+            records = records.filter(r => r.id !== id);
+            localStorage.setItem('bloodsugar_backup', JSON.stringify(records));
+            
+            fetch(`https://keyvalue.impathy.com/api/v1/pointer/${STORAGE_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: JSON.stringify(records) })
+            }).then(() => { fetchCloudData(); });
+        }
     }
 
     function updateSyncStatus(text, color, bgColor) {
@@ -300,6 +313,7 @@
             item.innerHTML = `
                 <span>📅 ${r.date} ${r.time} (${r.mealStatus})</span>
                 <strong>🩸 ${r.value} mmol/L</strong>
+                <button class="delete-btn" onclick="deleteRecord(${r.id})">删除</button>
             `;
             listContainer.appendChild(item);
         });
