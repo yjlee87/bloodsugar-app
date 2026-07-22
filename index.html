@@ -180,7 +180,7 @@
             <canvas id="bpChart"></canvas>
         </div>
         <p class="note" style="margin-top: 12px; margin-bottom: 0;">
-            🟥 收缩压正常范围 (90-120) 🟦 舒张压正常范围 (60-80)
+            🟩 绿色区间为正常范围：收缩压 90-120，舒张压 60-80
         </p>
     </div>
 
@@ -443,17 +443,15 @@
                         label: '收缩压 (高压)',
                         data: systolicData,
                         backgroundColor: '#ff3b30',
-                        borderColor: '#ff3b30',
                         pointRadius: 6,
-                        showLine: true
+                        showLine: false
                     },
                     {
                         label: '舒张压 (低压)',
                         data: diastolicData,
                         backgroundColor: '#007aff',
-                        borderColor: '#007aff',
                         pointRadius: 6,
-                        showLine: true
+                        showLine: false
                     }
                 ]
             },
@@ -483,10 +481,10 @@
                     if (!y) return;
                     ctx.save();
 
-                    // 收缩压/舒张压各自的正常范围色带，落在范围外即不正常
+                    // 收缩压/舒张压各自的正常范围色带（跟血糖图一样用绿色标出正常区间），落在范围外即不正常
                     const zones = [
-                        { from: 60,  to: 80,  color: 'rgba(0, 122, 255, 0.15)' },   // 舒张压正常范围
-                        { from: 90,  to: 120, color: 'rgba(255, 59, 48, 0.15)' }    // 收缩压正常范围
+                        { from: 60,  to: 80,  color: 'rgba(52, 199, 89, 0.15)' },   // 舒张压正常范围
+                        { from: 90,  to: 120, color: 'rgba(52, 199, 89, 0.15)' }    // 收缩压正常范围
                     ];
 
                     zones.forEach(zone => {
