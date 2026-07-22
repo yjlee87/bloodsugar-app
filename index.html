@@ -147,6 +147,10 @@
                 <input type="date" id="bpDate" required>
             </div>
             <div class="form-group">
+                <label for="bpTime">测量时间</label>
+                <input type="time" id="bpTime" required>
+            </div>
+            <div class="form-group">
                 <label for="systolic">收缩压 / 高压 (mmHg)</label>
                 <input type="number" id="systolic" step="1" placeholder="例如 120" required min="0">
             </div>
@@ -171,10 +175,13 @@
     </div>
 
     <div class="card">
-        <h2>血压趋势图表 (虚线：收缩压参考120 / 舒张压参考80)</h2>
+        <h2>血压趋势图表 (背景色标出收缩压/舒张压各自正常范围)</h2>
         <div class="chart-container">
             <canvas id="bpChart"></canvas>
         </div>
+        <p class="note" style="margin-top: 12px; margin-bottom: 0;">
+            🟥 收缩压正常范围 (90-120) 🟦 舒张压正常范围 (60-80)
+        </p>
     </div>
 
     <div class="card">
@@ -245,6 +252,7 @@
         const now = new Date();
         document.getElementById('date').value = now.toISOString().split('T')[0];
         document.getElementById('bpDate').value = now.toISOString().split('T')[0];
+        document.getElementById('bpTime').value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         const hours = now.getHours();
         const minutes = now.getMinutes();
         const timeVal = hours * 60 + minutes;
@@ -323,7 +331,6 @@
         try {
             await set(recordsRef, updated);
             document.getElementById('sugarValue').value = '';
-            // 界面会通过 onValue 自动刷新，不需要手动 renderChart/renderHistory
         } catch (e) {
             console.error(e);
             updateSyncStatus('❌ 保存失败，请重试', '#ff3b30', '#fdeceb');
@@ -359,17 +366,20 @@
 
     async function saveBPRecord() {
         const date = document.getElementById('bpDate').value;
+        const time = document.getElementById('bpTime').value;
         const systolic = parseFloat(document.getElementById('systolic').value);
         const diastolic = parseFloat(document.getElementById('diastolic').value);
 
         const newRecord = {
             id: Date.now(),
             date: date,
+            time: time,
+            dateTime: `${date}T${time}`,
             systolic: systolic,
             diastolic: diastolic
         };
 
-        const updated = [...bpRecords, newRecord].sort((a, b) => new Date(a.date) - new Date(b.date));
+        const updated = [...bpRecords, newRecord].sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
 
         const submitBtn = document.getElementById('bpSubmitBtn');
         submitBtn.disabled = true;
@@ -408,7 +418,7 @@
             const item = document.createElement('div');
             item.className = 'history-item';
             item.innerHTML = `
-                <span>📅 ${r.date}</span>
+                <span>📅 ${r.date} ${r.time || ''}</span>
                 <strong>💗 ${r.systolic}/${r.diastolic} mmHg</strong>
                 <button class="delete-btn" onclick="deleteBPRecord(${r.id})">删除</button>
             `;
@@ -418,8 +428,8 @@
 
     function renderBPChart() {
         const ctx = document.getElementById('bpChart').getContext('2d');
-        const systolicData = bpRecords.map(r => ({ x: new Date(r.date), y: r.systolic }));
-        const diastolicData = bpRecords.map(r => ({ x: new Date(r.date), y: r.diastolic }));
+        const systolicData = bpRecords.map(r => ({ x: new Date(r.dateTime || r.date), y: r.systolic }));
+        const diastolicData = bpRecords.map(r => ({ x: new Date(r.dateTime || r.date), y: r.diastolic }));
 
         if (bpChart) bpChart.destroy();
         const existingChart = Chart.getChart(ctx);
@@ -457,33 +467,34 @@
                 plugins: {
                     tooltip: {
                         callbacks: {
-                            label: function(context) { return `${context.dataset.label}: ${context.raw.y} mmHg`; }
+                            label: function(context) {
+                                const label = context.dataset.label;
+                                const timeStr = context.raw.x.toTimeString().slice(0, 5);
+                                return `${label}: ${context.raw.y} mmHg (${timeStr})`;
+                            }
                         }
                     }
                 }
             },
             plugins: [{
-                id: 'bpReferenceLines',
+                id: 'bpZoneBackground',
                 beforeDraw: function(chart) {
                     const {ctx, chartArea: {left, right}, scales: {y}} = chart;
                     if (!y) return;
                     ctx.save();
-                    ctx.setLineDash([5, 5]);
-                    ctx.lineWidth = 1;
 
-                    ctx.strokeStyle = 'rgba(255, 59, 48, 0.5)';
-                    const y120 = y.getPixelForValue(120);
-                    ctx.beginPath();
-                    ctx.moveTo(left, y120);
-                    ctx.lineTo(right, y120);
-                    ctx.stroke();
+                    // 收缩压/舒张压各自的正常范围色带，落在范围外即不正常
+                    const zones = [
+                        { from: 60,  to: 80,  color: 'rgba(0, 122, 255, 0.15)' },   // 舒张压正常范围
+                        { from: 90,  to: 120, color: 'rgba(255, 59, 48, 0.15)' }    // 收缩压正常范围
+                    ];
 
-                    ctx.strokeStyle = 'rgba(0, 122, 255, 0.5)';
-                    const y80 = y.getPixelForValue(80);
-                    ctx.beginPath();
-                    ctx.moveTo(left, y80);
-                    ctx.lineTo(right, y80);
-                    ctx.stroke();
+                    zones.forEach(zone => {
+                        const yTop = y.getPixelForValue(zone.to);
+                        const yBottom = y.getPixelForValue(zone.from);
+                        ctx.fillStyle = zone.color;
+                        ctx.fillRect(left, yTop, right - left, yBottom - yTop);
+                    });
 
                     ctx.restore();
                 }
